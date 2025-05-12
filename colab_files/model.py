@@ -1,43 +1,22 @@
-model.py
 import torch
 import torch.nn as nn
 from transformers import XLMRobertaModel, XLMRobertaConfig
 from typing import Optional, Tuple, List
-import random
-import numpy as np
-
-def set_seed(seed=42):
-    """
-    Set seed for reproducibility.
-    
-    Args:
-        seed: Seed value to use
-    """
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 class IdiomDetectionModel(nn.Module):
     """
     Idiom Detection Model using XLM-RoBERTa-large backbone.
     This model predicts whether each token is part of an idiom (B, I) or not (O).
     """
-    def __init__(self, model_name, dropout_rate=0.1, seed=42):
+    def __init__(self, model_name, dropout_rate=0.1):
         """
         Initialize the idiom detection model.
         
         Args:
             model_name: Name of the pretrained model to use as the encoder
             dropout_rate: Dropout rate for the classification head
-            seed: Seed for reproducibility
         """
         super().__init__()
-        
-        # Set seed for reproducibility
-        set_seed(seed)
         
         # Load model configuration
         self.config = XLMRobertaConfig.from_pretrained(model_name)

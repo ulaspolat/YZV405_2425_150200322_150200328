@@ -4964,34 +4964,6 @@ de uyurken ya da dinlenirken tek bacakları üzerinde durur.","['Yalnızca', 'fl
 4956,tr,Elmaların ortasına bıçak koydu.,"['Elmaların', 'ortasına', 'bıçak', 'koydu', '.']",ortaya koymak,literal,[-1]
 4957,tr,"Tüm hayvanları zamanla sevdi, onun için öldürmek çok zordu.","['Tüm', 'hayvanları', 'zamanla', 'sevdi', ',', 'onun', 'için', 'öldürmek', 'çok', 'zordu', '.']",zaman öldürmek,literal,[-1]
 4958,tr,Negatif enerjisini üstünden atmayı başardı.,"['Negatif', 'enerjisini', 'üstünden', 'atmayı', 'başardı', '.']",üstünden atmak,literal,[-1]
-4959,tr,"Hesap ....;……
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Vermek","['Hesap', '....', ';', '……', 'Vermek']",hesap vermek,idiomatic,"[0, 4]"
 4960,tr,"Güldüğüme bakmayın, ben şimdi ayvayı yedim.","['Güldüğüme', 'bakmayın', ',', 'ben', 'şimdi', 'ayvayı', 'yedim', '.']",ayvayı yemek,idiomatic,"[5, 6]"
 4961,tr,Bu hep karşımıza gelecekse ay sonuna çıkmamız zor,"['Bu', 'hep', 'karşımıza', 'gelecekse', 'ay', 'sonuna', 'çıkmamız', 'zor']",karşı çıkmak,literal,[-1]
 4962,tr,İstemeden de olsa ona karşı çıkmış oldum.,"['İstemeden', 'de', 'olsa', 'ona', 'karşı', 'çıkmış', 'oldum', '.']",karşı çıkmak,idiomatic,"[4, 5]"

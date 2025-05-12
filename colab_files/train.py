@@ -1,18 +1,66 @@
-train.py
 import os
 import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from transformers import XLMRobertaTokenizer, get_linear_schedule_with_warmup
+from transformers import XLMRobertaTokenizer, get_linear_schedule_with_warmup, set_seed as set_transformers_seed
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
-from sklearn.metrics import f1_score
+import random  # Added for reproducibility
 
 from model import IdiomDetectionModel
 from dataset import create_data_loaders
+
+# Function to set random seeds for reproducibility
+def set_seed(seed):
+    """
+    Set random seeds for reproducibility across all libraries.
+    
+    Args:
+        seed: Integer seed value
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # Additional deterministic settings for PyTorch
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    # Set Python hash seed for reproducibility of operations like dictionary iteration
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    # Set seed for the transformers library
+    set_transformers_seed(seed)
+
+# Function to calculate per-row F1 score like in scoring.py
+def calculate_f1_score(predicted_indices_list, gold_indices_list):
+    f1_scores = []
+
+    # Compute F1 scores for each row
+    for pred, gold in zip(predicted_indices_list, gold_indices_list):
+        # Special case for ground truth [-1]
+        if gold == [-1]:
+            # Prediction must also be exactly [-1]
+            if pred == [-1]:
+                f1_scores.append(1.0)
+            else:
+                f1_scores.append(0.0)
+        else:
+            # Convert indices into sets for comparison
+            pred_set = set(pred) if isinstance(pred, list) else set()
+            gold_set = set(gold) if isinstance(gold, list) else set()
+
+            # Calculate precision, recall, and F1 score
+            intersection = len(pred_set & gold_set)
+            precision = intersection / len(pred_set) if len(pred_set) > 0 else 0
+            recall = intersection / len(gold_set) if len(gold_set) > 0 else 0
+            f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+            f1_scores.append(f1)
+
+    # Compute mean F1 score
+    return np.mean(f1_scores)
 
 def train(args):
     """
@@ -21,6 +69,9 @@ def train(args):
     Args:
         args: Command-line arguments
     """
+    # Set seed for reproducibility
+    set_seed(args.seed)
+    
     # Check if we're running in Colab
     try:
         import google.colab
@@ -50,7 +101,8 @@ def train(args):
         tokenizer,
         batch_size=args.batch_size,
         max_length=args.max_length,
-        language_filter=args.language_filter
+        language_filter=args.language_filter,
+        seed=args.seed
     )
     
     print(f"Train dataset size: {len(train_dataloader.dataset)}")
@@ -114,8 +166,8 @@ def train(args):
         # Evaluation
         model.eval()
         eval_loss = 0.0
-        all_preds = []
-        all_labels = []
+        all_predicted_indices = []
+        all_gold_indices = []
         
         eval_pbar = tqdm(eval_dataloader, desc="Evaluating")
         for batch in eval_pbar:
@@ -130,24 +182,26 @@ def train(args):
             
             eval_loss += loss.item()
             
-            # Get predictions (binary classification)
-            predictions = (torch.sigmoid(logits) > 0.5).float()
+            # Convert logits to idiom indices for each example in the batch
+            predicted_indices = model.convert_logits_to_indices(
+                logits, 
+                batch['attention_mask']
+            )
+            all_predicted_indices.extend(predicted_indices)
             
-            # Convert to numpy arrays for metric calculation
-            attention_mask = batch['attention_mask'].cpu().numpy()
-            predictions = predictions.cpu().numpy()
-            labels = batch['labels'].cpu().numpy()
-            
-            # Mask out padded tokens
-            for i in range(len(predictions)):
-                mask = attention_mask[i] == 1
-                all_preds.extend(predictions[i, mask])
-                all_labels.extend(labels[i, mask])
+            # Generate gold indices from labels for each example
+            for i in range(batch['labels'].size(0)):
+                # Get positions where label is 1 (idiom token)
+                gold_idx = torch.where(batch['labels'][i] == 1)[0].cpu().tolist()
+                # If no idiom tokens, set to [-1]
+                if len(gold_idx) == 0:
+                    gold_idx = [-1]
+                all_gold_indices.append(gold_idx)
         
         avg_eval_loss = eval_loss / len(eval_dataloader)
         
-        # Calculate F1 score
-        f1 = f1_score(all_labels, all_preds, average='macro')
+        # Calculate F1 score using the same logic as in scoring.py
+        f1 = calculate_f1_score(all_predicted_indices, all_gold_indices)
         
         print(f"Average evaluation loss: {avg_eval_loss:.4f}")
         print(f"F1 score: {f1:.4f}")
@@ -173,6 +227,9 @@ if __name__ == "__main__":
     parser.add_argument("--eval_file", type=str, default="/content/drive/MyDrive/nlp-project/public_data/eval.csv", help="Path to the evaluation file")
     parser.add_argument("--language_filter", type=str, default=None, help="Filter for a specific language (e.g., 'tr')")
     parser.add_argument("--output_dir", type=str, default="/content/drive/MyDrive/nlp-project/models", help="Output directory for saved models")
+    
+    # Add seed argument for reproducibility
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     
     # Model arguments
     parser.add_argument("--model_name", type=str, default="xlm-roberta-large", help="Name of the pretrained model")
