@@ -61,7 +61,7 @@ def convert_subword_to_word_indices(subword_indices, tokenized_sentence, tokeniz
         word_to_subwords[word_idx] = subword_indices_for_word
         current_subword_idx += len(subword_tokens)
     
-    # Find which words have subwords predicted as part of an idiom
+    # Find which words have subwords predicted as part of an idiom (B or I tag)
     predicted_word_indices = []
     for word_idx, word_subwords in word_to_subwords.items():
         # Check if any of this word's subwords are in the predicted idiom subwords
@@ -94,6 +94,16 @@ def predict(args):
     
     if IN_COLAB:
         print("Running in Google Colab environment")
+    
+    # Install pytorch-crf if necessary
+    if args.use_crf and IN_COLAB:
+        try:
+            import torchcrf
+        except ImportError:
+            print("Installing pytorch-crf...")
+            import subprocess
+            subprocess.check_call(["pip", "install", "pytorch-crf"])
+            print("pytorch-crf installed successfully.")
     
     # Set the device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -136,11 +146,43 @@ def predict(args):
     languages = [args.language_filter] if args.language_filter else ['tr', 'it']
     
     for lang in languages:
-        # Create the model
-        model = IdiomDetectionModel(args.model_name, args.dropout_rate)
+        # Create the model with CRF if specified
+        model = IdiomDetectionModel(
+            args.model_name, 
+            dropout_rate=args.dropout_rate,
+            use_crf=args.use_crf,
+            use_bilstm=args.use_bilstm,
+            use_mlp=args.use_mlp,
+            lstm_hidden_dim=args.lstm_hidden_dim,
+            mlp_hidden_dim=args.mlp_hidden_dim
+        )
         
-        # Load the trained model
-        model_path = os.path.join(args.model_dir, f"{args.model_name.split('/')[-1]}-{lang}.pt")
+        # Determine model path with suffix
+        model_suffix = f"{args.model_name.split('/')[-1]}"
+        if lang:
+            model_suffix += f"-{lang}"
+        if args.use_bilstm:
+            model_suffix += "-bilstm"
+        if args.use_mlp:
+            model_suffix += "-mlp"
+        if args.use_crf:
+            model_suffix += "-crf"
+        if args.use_weighted_loss:
+            model_suffix += "-weighted"
+        
+        model_path = os.path.join(args.model_dir, f"{model_suffix}.pt")
+        
+        # If specific model not found, try generic model without architectural suffixes
+        if not os.path.exists(model_path):
+            print(f"Warning: Model with specified architecture not found at {model_path}.")
+            basic_suffix = f"{args.model_name.split('/')[-1]}"
+            if lang:
+                basic_suffix += f"-{lang}"
+            basic_model_path = os.path.join(args.model_dir, f"{basic_suffix}.pt")
+            if os.path.exists(basic_model_path):
+                print(f"Trying basic model at {basic_model_path} instead.")
+                model_path = basic_model_path
+        
         if os.path.exists(model_path):
             print(f"Loading model for language {lang} from {model_path}")
             model.load_state_dict(torch.load(model_path, map_location=device))
@@ -166,7 +208,7 @@ def predict(args):
         for i in range(len(batch['input_ids'])):
             example = {k: v[i].unsqueeze(0) if isinstance(v, torch.Tensor) else v[i] for k, v in batch.items()}
             lang = example.get('language', args.language_filter)
-            example_id = example['id'].item()
+            example_id = example['id']
             
             # Use the corresponding model for this language
             if lang in models:
@@ -191,7 +233,7 @@ def predict(args):
                     attention_mask=example['attention_mask']
                 )
             
-            # Get subword token predictions
+            # Get subword token predictions for B and I tags
             subword_indices = model.convert_logits_to_indices(logits, example['attention_mask'])[0]
             
             # Convert subword indices to word indices
@@ -230,6 +272,14 @@ if __name__ == "__main__":
     parser.add_argument("--model_dir", type=str, default="/content/drive/MyDrive/nlp-project/models", help="Directory containing trained models")
     parser.add_argument("--max_length", type=int, default=128, help="Maximum sequence length")
     parser.add_argument("--dropout_rate", type=float, default=0.1, help="Dropout rate for the classification head")
+    
+    # Architecture arguments
+    parser.add_argument("--use_crf", action="store_true", help="Use CRF layer for sequence labeling")
+    parser.add_argument("--use_weighted_loss", action="store_true", help="Indicates if the model was trained with weighted loss")
+    parser.add_argument("--use_bilstm", action="store_true", help="Use BiLSTM layer after transformer encoder")
+    parser.add_argument("--use_mlp", action="store_true", help="Use MLP classifier instead of linear layer")
+    parser.add_argument("--lstm_hidden_dim", type=int, default=768, help="Hidden dimension of the LSTM layer (per direction)")
+    parser.add_argument("--mlp_hidden_dim", type=int, default=512, help="Hidden dimension of the MLP classifier")
     
     # Prediction arguments
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for prediction")

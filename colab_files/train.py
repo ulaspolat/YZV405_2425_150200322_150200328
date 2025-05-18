@@ -91,25 +91,60 @@ def train(args):
         print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
         print(f"Total GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     
+    # Install pytorch-crf if necessary
+    if args.use_crf and IN_COLAB:
+        try:
+            import torchcrf
+        except ImportError:
+            print("Installing pytorch-crf...")
+            import subprocess
+            subprocess.check_call(["pip", "install", "pytorch-crf"])
+            print("pytorch-crf installed successfully.")
+    
     # Create tokenizer
     tokenizer = XLMRobertaTokenizer.from_pretrained(args.model_name)
     
-    # Create data loaders
-    train_dataloader, eval_dataloader = create_data_loaders(
+    # Create data loaders with class weights if needed
+    train_dataloader, eval_dataloader, class_weights = create_data_loaders(
         args.train_file,
         args.eval_file,
         tokenizer,
         batch_size=args.batch_size,
         max_length=args.max_length,
         language_filter=args.language_filter,
-        seed=args.seed
+        seed=args.seed,
+        use_class_weights=args.use_weighted_loss
     )
     
     print(f"Train dataset size: {len(train_dataloader.dataset)}")
     print(f"Eval dataset size: {len(eval_dataloader.dataset)}")
     
-    # Create model
-    model = IdiomDetectionModel(args.model_name, args.dropout_rate)
+    # Display model configuration
+    model_type = f"XLM-RoBERTa with "
+    if args.use_bilstm:
+        model_type += "BiLSTM, "
+    if args.use_mlp:
+        model_type += "MLP, "
+    if args.use_crf:
+        model_type += "CRF, "
+    if args.use_weighted_loss:
+        model_type += "weighted loss"
+    else:
+        model_type = model_type.rstrip(", ") # Remove trailing comma
+    
+    print(f"Training model: {model_type}")
+    
+    # Create model with BiLSTM, MLP, CRF and/or class weights
+    model = IdiomDetectionModel(
+        args.model_name, 
+        dropout_rate=args.dropout_rate,
+        use_crf=args.use_crf,
+        use_bilstm=args.use_bilstm,
+        use_mlp=args.use_mlp,
+        lstm_hidden_dim=args.lstm_hidden_dim,
+        mlp_hidden_dim=args.mlp_hidden_dim,
+        class_weights=class_weights if args.use_weighted_loss else None
+    )
     model.to(device)
     
     # Create optimizer and scheduler
@@ -191,8 +226,9 @@ def train(args):
             
             # Generate gold indices from labels for each example
             for i in range(batch['labels'].size(0)):
-                # Get positions where label is 1 (idiom token)
-                gold_idx = torch.where(batch['labels'][i] == 1)[0].cpu().tolist()
+                # Get positions where label is B (0) or I (1)
+                # We need to consider both B and I tags as part of the idiom
+                gold_idx = torch.where((batch['labels'][i] == 0) | (batch['labels'][i] == 1))[0].cpu().tolist()
                 # If no idiom tokens, set to [-1]
                 if len(gold_idx) == 0:
                     gold_idx = [-1]
@@ -212,7 +248,20 @@ def train(args):
             if not os.path.exists(args.output_dir):
                 os.makedirs(args.output_dir)
             
-            model_path = os.path.join(args.output_dir, f"{args.model_name.split('/')[-1]}-{args.language_filter}.pt")
+            # Add suffix to model name to indicate architecture components
+            model_suffix = f"{args.model_name.split('/')[-1]}"
+            if args.language_filter:
+                model_suffix += f"-{args.language_filter}"
+            if args.use_bilstm:
+                model_suffix += "-bilstm"
+            if args.use_mlp:
+                model_suffix += "-mlp"  
+            if args.use_crf:
+                model_suffix += "-crf"
+            if args.use_weighted_loss:
+                model_suffix += "-weighted"
+            
+            model_path = os.path.join(args.output_dir, f"{model_suffix}.pt")
             torch.save(model.state_dict(), model_path)
             print(f"Saved best model to {model_path}")
     
@@ -235,6 +284,14 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, default="xlm-roberta-large", help="Name of the pretrained model")
     parser.add_argument("--max_length", type=int, default=128, help="Maximum sequence length")
     parser.add_argument("--dropout_rate", type=float, default=0.1, help="Dropout rate for the classification head")
+    
+    # Architecture arguments
+    parser.add_argument("--use_crf", action="store_true", help="Use CRF layer for sequence labeling")
+    parser.add_argument("--use_weighted_loss", action="store_true", help="Use weighted loss to address class imbalance")
+    parser.add_argument("--use_bilstm", action="store_true", help="Use BiLSTM layer after transformer encoder")
+    parser.add_argument("--use_mlp", action="store_true", help="Use MLP classifier instead of linear layer")
+    parser.add_argument("--lstm_hidden_dim", type=int, default=768, help="Hidden dimension of the LSTM layer (per direction)")
+    parser.add_argument("--mlp_hidden_dim", type=int, default=512, help="Hidden dimension of the MLP classifier")
     
     # Training arguments
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size for training and evaluation")

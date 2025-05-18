@@ -4,6 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 import ast
 from transformers import XLMRobertaTokenizer
 from typing import List, Dict, Tuple, Optional
+import numpy as np
 
 
 class IdiomDetectionDataset(Dataset):
@@ -33,11 +34,15 @@ class IdiomDetectionDataset(Dataset):
         # Parse the word-level tokens and idiom indices
         word_tokens = ast.literal_eval(example['tokenized_sentence'])
         idiom_indices = self._parse_idiom_indices(example['indices']) if self.has_labels else []
+        
+        # Convert idiom_indices to a set for faster lookup
+        idiom_set = set(idiom_indices)
 
         # Initialize sequences
         subword_ids = [self.tokenizer.cls_token_id]
         attention_mask = [1]
-        labels = [0.0] if self.has_labels else None
+        # Use -100 for special tokens so they're ignored by the loss function
+        labels = [-100] if self.has_labels else None
 
         # Align subwords with idiom word indices
         for word_idx, word in enumerate(word_tokens):
@@ -48,13 +53,21 @@ class IdiomDetectionDataset(Dataset):
             attention_mask.extend([1] * len(word_piece_ids))
 
             if self.has_labels:
-                label = 1.0 if word_idx in idiom_indices else 0.0
+                # BIO tagging: B(0) for first token of an idiom span, I(1) for subsequent tokens in same span, O(2) for non-idiom
+                if word_idx in idiom_set:
+                    # Check if the previous word is part of idiom - if not, this is a beginning (B)
+                    if (word_idx - 1) not in idiom_set:
+                        label = 0  # B tag - beginning of idiom span
+                    else:
+                        label = 1  # I tag - continuation of idiom span
+                else:
+                    label = 2  # O tag - not part of idiom
                 labels.extend([label] * len(word_piece_ids))
 
         subword_ids.append(self.tokenizer.sep_token_id)
         attention_mask.append(1)
         if self.has_labels:
-            labels.append(0.0)
+            labels.append(-100)  # Ignore SEP token for loss calculation
 
         # Padding
         pad_len = self.max_length - len(subword_ids)
@@ -62,7 +75,7 @@ class IdiomDetectionDataset(Dataset):
             subword_ids += [self.tokenizer.pad_token_id] * pad_len
             attention_mask += [0] * pad_len
             if self.has_labels:
-                labels += [0.0] * pad_len
+                labels += [-100] * pad_len  # Ignore padding tokens for loss calculation
         else:
             subword_ids = subword_ids[:self.max_length]
             attention_mask = attention_mask[:self.max_length]
@@ -108,6 +121,40 @@ class IdiomDetectionDataset(Dataset):
         return batch_dict
 
 
+def calculate_class_weights(dataset):
+    """
+    Calculate class weights based on the frequency of each class in the dataset.
+    
+    Args:
+        dataset: An IdiomDetectionDataset with labels
+        
+    Returns:
+        A tensor of weights for each class (B, I, O) to address class imbalance
+    """
+    if not hasattr(dataset, 'has_labels') or not dataset.has_labels:
+        return None
+
+    # Count occurrences of each class
+    class_counts = [0, 0, 0]  # B, I, O
+    for i in range(len(dataset)):
+        labels = dataset[i]['labels']
+        for label in labels:
+            if label.item() >= 0 and label.item() < 3:  # Exclude -100
+                class_counts[label.item()] += 1
+    
+    # Handle potential empty classes (avoid division by zero)
+    class_counts = [max(count, 1) for count in class_counts]
+    total_samples = sum(class_counts)
+    
+    # Calculate inverse frequency
+    weights = torch.tensor([total_samples / (3 * count) for count in class_counts])
+    
+    # Normalize weights
+    weights = weights / weights.sum() * 3
+    
+    return weights
+
+
 def create_data_loaders(
     train_file: str,
     eval_file: str,
@@ -115,8 +162,27 @@ def create_data_loaders(
     batch_size: int = 16,
     max_length: int = 128,
     language_filter: Optional[str] = None,
-    seed: int = 42
-) -> Tuple[DataLoader, DataLoader]:
+    seed: int = 42,
+    use_class_weights: bool = True
+) -> Tuple[DataLoader, DataLoader, Optional[torch.Tensor]]:
+    """
+    Create data loaders for training and evaluation.
+    
+    Args:
+        train_file: Path to the training CSV file
+        eval_file: Path to the evaluation CSV file
+        tokenizer: Tokenizer to use for preprocessing
+        batch_size: Batch size for training and evaluation
+        max_length: Maximum sequence length
+        language_filter: Optional filter for a specific language
+        seed: Random seed for reproducibility
+        use_class_weights: Whether to calculate class weights for weighted loss
+        
+    Returns:
+        train_dataloader: DataLoader for training
+        eval_dataloader: DataLoader for evaluation
+        class_weights: Optional tensor of class weights, or None if use_class_weights is False
+    """
     train_dataset = IdiomDetectionDataset(
         train_file,
         tokenizer,
@@ -130,6 +196,12 @@ def create_data_loaders(
         max_length=max_length,
         language_filter=language_filter
     )
+    
+    # Calculate class weights if requested
+    class_weights = None
+    if use_class_weights:
+        class_weights = calculate_class_weights(train_dataset)
+        print(f"Class weights calculated from training data: {class_weights}")
 
     train_generator = torch.Generator()
     train_generator.manual_seed(seed)
@@ -150,4 +222,4 @@ def create_data_loaders(
         collate_fn=eval_dataset.collate_fn
     )
 
-    return train_dataloader, eval_dataloader
+    return train_dataloader, eval_dataloader, class_weights
