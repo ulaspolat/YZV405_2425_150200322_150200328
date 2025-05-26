@@ -1,4 +1,4 @@
-# Idiom Detection Model
+# Turkish and Italian Idiom Detection Model
 
 This repository contains a sophisticated idiom detection model for multilingual idiom detection in Turkish and Italian languages. The model can detect idioms in sentences and classify whether the idiom is used in its figurative (idiomatic) or literal sense.
 
