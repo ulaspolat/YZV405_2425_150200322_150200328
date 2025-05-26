@@ -70,7 +70,6 @@ Train the model for Turkish:
   --num_epochs 15 \
   --use_crf True \
   --use_mlp True \
-  --use_weighted_loss True \
   --seed 42
 ```
 
@@ -88,7 +87,6 @@ Train the model for Italian:
   --use_crf True \
   --use_bilstm True \
   --use_mlp True \
-  --use_weighted_loss True \
   --seed 42
 ```
 
